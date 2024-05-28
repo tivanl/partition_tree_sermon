@@ -1,18 +1,7 @@
 ---
 title: "Decision trees"
 date: "2024-05-16"
-format: 
-  gfm:
-    self-contained: true
-    toc: true
-    toc_float: true
-    toc-depth: 2
-    toc-title: Contents
-    toc-location: left
-    css: ["docs/styles.css"]
-editor: source
-editor_options: 
-  chunk_output_type: console
+format: gfm
 execute: 
   echo: true
   warning: false
