@@ -1,0 +1,247 @@
+---
+title: "ESTIMATING MONTHLY HOUSEHOLD INCOME USING THE NIGERIA LIVING STANDARDS SURVEY"
+date: "2024-05-16"
+format: 
+  html:
+    self-contained: true
+    toc: true
+    toc_float: true
+    toc-depth: 2
+    toc-title: Contents
+    toc-location: left
+    css: ["docs/styles.css"]
+editor: source
+editor_options: 
+  chunk_output_type: console
+execute: 
+  echo: false
+  warning: false
+  message: false
+---
+
+
+<!-- ![](bin/logo_cahf.png){.toc-image} -->
+
+<!-- <div style="text-align: justify"> -->
+
+This document explains the derivation of an estimate of monthly household income, using data from the 2018 Nigeria Living Standards Survey (NLSS) published on the [Nigeria Housing Data Dashboard](https://analytics.housingfinanceafrica.org/). 
+
+## Expenditure as a proxy for income
+
+Accurately measuring household income is notoriously challenging as survey respondents typically underreport income (see [Deaton, 2018:29](https://documents1.worldbank.org/curated/en/593871468777303124/pdf/17140-PUB-revised-PUBLIC-9781464813313-Updated.pdf) for more detail). In our analysis of the NLSS, we used an estimate of household expenditure as a proxy for income - a common approach that is generally seen as more accurate for countries with large informal sectors. Nevertheless, it is worth noting that even this expenditure-based estimate may be understated, particularly in more affluent segments of the market, as some expenditure items are omitted from the survey. Most notably, the survey does not include the purchase of vehicles, a major expenditure category in developed economies, and presumably likewise in more affluent segments of the Nigerian market.
+
+The figure below presents the distribution of households by monthly expenditure as calculated using the NLSS. In the sections that follow, we describe our methodology to calculate monthly household expenditure as a proxy for monthly household income. 
+
+```{r visualise_expenditure}
+#| fig-width: 10
+#| fig-height: 6
+#| label: exp-dist-plot
+
+library(targets)
+library(ggthemes)
+library(htmltools)
+library(glue)
+library(gt)
+library(scales)
+library(snakecase)
+library(readxl)
+library(janitor)
+library(tidyverse)
+
+# section_filter <- "Health"
+
+get_section_table <- function(section_filter){
+  
+  read_xlsx("data/expenditure_table/selected_expenditure_variables.xlsx") %>%
+    # clean_names() %>% 
+    filter(grepl(section_filter, `Table name`, ignore.case = T)) %>% 
+    select(-`Table name`) %>% 
+    gt() %>% 
+    tab_header(
+      title = md(glue("**Expenditure variables selected from {section_filter} section**"))
+    ) %>% 
+    tab_style(
+      style = cell_text(weight = "bold"),
+      locations = cells_column_labels(columns = everything())
+    ) %>% 
+    tab_options(
+      heading.align = "center"  
+      # table.font.names = "Open Sans",
+      # table.font.url = "https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&display=swap"
+    ) %>% 
+    opt_table_font(
+      font = list(
+        google_font(name = "Open Sans")
+      )
+    )
+}
+
+
+tar_read(hh_exp_burden) %>%
+  ungroup() %>% 
+  # select(expenditure_bracket_num) %>% 
+  # arrange(expenditure_bracket_num) %>% 
+  separate(
+    col = expenditure_bracket_num,
+    into = c("level", "exp_bracket"),
+    sep = "\\. "
+  ) %>% 
+  arrange(level) %>% 
+  mutate(
+    exp_bracket = gsub("([>=] )(\\d)", "\\1₦\\2", exp_bracket),
+    exp_bracket = as_factor(exp_bracket)
+  ) %>% 
+  group_by(exp_bracket) %>%
+  summarise(
+    num_hhs = sum(wt_final, na.rm = T),
+    mean_exp_30d = sum(wt_final*total_exp, na.rm = T)/sum(wt_final, na.rm = T)
+  ) %>%
+  mutate(
+    label = str_c(formatC(num_hhs/1000000, format = "f", big.mark = ",", digits = 2), " M", sep = "")
+  ) %>% 
+  ggplot(aes(x = exp_bracket, y = num_hhs, label = label)) +
+  geom_bar(stat = "identity", fill = "#FF5500") +
+  geom_text(nudge_y = 500000) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Distribution of households by monthly expenditure in Nigeria",
+    x = ""
+   ) +
+  scale_y_continuous(limits = c(NA, 17000000)) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 20, family = "Open Sans"),
+    panel.grid.major = element_blank(), # Remove major gridlines
+    panel.grid.minor = element_blank(),  # Remove minor gridlines
+    panel.background = element_rect(fill = "#F0F0F0", color = NA), # Set the panel background to grey
+    plot.background = element_rect(fill = "#F0F0F0", color = NA),
+    axis.text.y = element_blank(),    # Remove y-axis text
+    axis.ticks.y = element_blank(),   # Remove y-axis ticks
+    axis.title.y = element_blank(),    # Remove y-axis title
+    axis.text.x = element_text(colour = "black", size = 12)
+  )
+
+```
+
+## Measuring expenditure using the Nigeria Living Standards Survey
+
+The NLSS explores expenditure using the recall method, requiring respondents to report expenditure on various items over a stated time period. These time periods differ depending on the item. In some categories, respondents are asked to recall their expenditure over the previous seven days while in others the survey question refers to monthly or annual frequencies. 
+
+The NLSS has specific sections that contain most of the expenditure-related questions (referred to here as the ‘General Expenditure’ sections). However, there are also expenditure-related questions in the Education, Health, Housing and Agriculture sections of the survey. 
+
+Our expenditure estimate aggregates data from all these sections and adjusts for different frequencies by standardising expenditure to equivalent 30-day estimates. It then applies household weights to derive a distribution of households by household income. Data for households in Borno state are excluded from all analysis due to [incomplete data collection as a result of regional conflict](https://microdata.worldbank.org/index.php/catalog/3827/download/49288).
+
+Sections of the survey included in the derivation of total monthly household expenditure are explained in more detail below.
+
+## General expenditure (Sections 6A, 6B and 7)
+
+These sections of the survey explore food and non-food expenditure at differing frequencies. The included sections are: 
+
+* Section 6A: Meals consumed away from home (past 7 days)
+* Section 6B: Food consumption expenditure
+* Section 7: Non-food expenditure (past 7-days, past 30 days, and past 12 months, depending on the item)
+
+## Education (Section 2)
+
+The Education section contains questions on the amount that households spend both directly and indirectly on education. The phrasing of questions in this section depends on the time of year. If the survey is conducted before the commencement of the school year, parents are asked how much the household expects to spend for the upcoming school year. If the survey is conducted during the course of the school year, parents are asked how much the household has spent so far, and how much more the household expects to spend for the remainder of the school year. 
+
+Both past education expenditure and expected education expenditure are included in the calculation to derive a total annual education expenditure. The specific variables included in these calculations are listed in the table below. Note that multiple question numbers exist to accommodate for the variability in timeframe explained above. 
+
+```{r educattion}
+get_section_table("Education")
+```
+
+## Health (Section 3)
+
+While the General Expenditure section of the survey includes basic information on healthcare expenditure (expenditure on pharmaceutical products and therapeutic equipment), more detailed questions in the Health section of the survey gather expenditure data on specific healthcare items. Given their more granular detail we have opted to use that data rather than the data from the General Expenditure section of the survey to calculate health expenditure. Specifically, expenditure item code _355 – Health expenditures (excluding insurance and pharmaceutical products)_ in the General Expenditure section is excluded from the total expenditure estimates to avoid double counting as this expenditure is also captured in the Health section.
+
+Specific items from the Health section of the survey that are included in the analysis are listed in the table below.
+
+```{r}
+get_section_table("Health")
+```
+
+
+## Housing (Section 14)
+
+The General Expenditure section of the survey includes mortgage expenditure as well as expenditure for repairs and maintenance to the household dwelling and other housing charges. These items are included in addition to the variables in the table below from the Housing section of the survey. 
+
+```{r}
+get_section_table("Housing")
+```
+
+## Agriculture (Section 18)
+
+The Agriculture section of the survey explores household consumption of crops and livestock. This consumption is included in the expenditure estimate on the premise that consumption of own produce displaces the purchase of such produce. 
+
+In the survey, consumption of livestock is reported in terms of an estimated monetary value (Naira over the past 12 months). However, for crops, the household only reports the number of units consumed from its own production. To derive a monetary value for the household’s crop consumption, the number of units consumed must first be converted into kilograms consumed using the conversion variable contained in the data. The price per kilogram for each crop is derived from data provided on the value and amount of the crop sold at the market. These variables are used to derive the value of the household consumption of the crop by multiplying the price per kilogram sold with the kilograms consumed. For households that don’t report selling any of the crops that they consumed, the price per kilogram is based on the average price for that crop across all households who did sell the crop. 
+
+```{r}
+get_section_table("Agriculture")
+```
+
+## Expenditure distribution
+
+The density function for the distribution of total monthly household expenditure calculated by summing the various expenditure items listed above is visualised in the graph below. While the expenditure estimates are likely underestimating total expenditure, it is reassuring that the data are log-normally distributed as we would expect from expenditure/income data.
+
+```{r}
+#| fig-width: 10
+#| fig-height: 7
+
+naira_format <- function(x) {
+  paste0("₦", formatC(x, format = "f", big.mark = ",", digits = 0))
+}
+
+tar_read(hh_exp_burden) %>% 
+  ggplot(
+    aes(
+      x = total_exp, weight = wt_final
+    )
+  ) +
+  geom_density(fill = "#FF5500", colour= "#FF5500") +
+  scale_x_continuous(
+    trans = "log", 
+    label = naira_format,
+    breaks = c(1000, 2500, 10000, 50000, 221300, 700000)
+  ) +
+  # theme_clean() +
+  labs(
+    title = "Distribution of Nigerian households by 30-day expenditure",
+    # subtitle = "(Density plot)",
+    x = "",
+  ) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 20, family = "Open Sans"),
+    panel.grid.major = element_blank(), # Remove major gridlines
+    panel.grid.minor = element_blank(),  # Remove minor gridlines
+    panel.background = element_rect(fill = "#F0F0F0", color = NA), # Set the panel background to grey
+    plot.background = element_rect(fill = "#F0F0F0", color = NA),
+    axis.text.y = element_blank(),    # Remove y-axis text
+    axis.ticks.y = element_blank(),   # Remove y-axis ticks
+    axis.title.y = element_blank(),    # Remove y-axis title
+    axis.text.x = element_text(colour = "black", size = 12)
+  )
+
+# c(, "#9d3850", "#ad5466", "#bb6d7b", "#c7858f", 
+#               "#d29ba3", "#ddb0b6", "#e7c4c9", "#efd8db", "#f8eced")
+
+```
+
+
+The [Nigeria Housing Data Dashboard](https://analytics.housingfinanceafrica.org/) was developed by [71point4](https://www.71point4.com/) with support from the [Centre for Affordable Housing Finance Africa](https://housingfinanceafrica.org/) (itself supported by Agence Française de Développement) and the cooperation of the [Nigeria Mortgage Refinance Company](https://nmrc.com.ng/). 
+
+<!-- ```{=html} -->
+<!-- <div class="row"> -->
+<!--   <div class="column"> -->
+<!--     <img class="myimg" src="bin/three_71point4.png" alt="71point4" style="width:100%"> -->
+<!--   </div> -->
+<!--   <div class="column"> -->
+<!--     <img class="myimg" src="bin/three_cahf.png" alt="cahf" style="width:100%"> -->
+<!--   </div> -->
+<!--   <div class="column"> -->
+<!--     <img class="myimg" src="bin/three_nmrc.png" alt="nmrc" style="width:100%"> -->
+<!--   </div> -->
+<!-- </div> -->
+<!-- ``` -->
+
+![](bin/final_logos.png)
+<!-- </div> -->
